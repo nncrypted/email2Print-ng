@@ -51,8 +51,17 @@ PRINTER_NAME = get_env_var("PRINTER_NAME", required=True)
 SLEEP_TIME = int(get_env_var("SLEEP_TIME", default=60))
 CONFIRM_SUBJECT = get_env_var("CONFIRM_SUBJECT", default="Your Print Job Confirmation")
 ALLOWED_ATTACHMENT_TYPES = [ext.strip().lower() for ext in get_env_var("ALLOWED_ATTACHMENT_TYPES", default="").split(",") if ext]
-ALLOWED_RECIPIENTS = [addr.strip().lower() for addr in get_env_var("ALLOWED_RECIPIENTS", default="").split(",") if addr]
+#ALLOWED_RECIPIENTS = [addr.strip().lower() for addr in get_env_var("ALLOWED_RECIPIENTS", default="").split(",") if addr]
+ALLOWED_SENDERS = [addr.strip().lower() for addr in get_env_var("ALLOWED_SENDERS", default=get_env_var("ALLOWED_RECIPIENTS", default="")).split(",") if addr]
 DETAILED_CONFIRMATION = get_env_var("DETAILED_CONFIRMATION", default="false").lower() == "true"
+SEND_CONFIRMATION = get_env_var("SEND_CONFIRMATION", default="true").lower() == "true"
+
+#New Features
+PRINT_EMAIL_BODY = os.getenv("PRINT_EMAIL_BODY", "false").lower() == "true"
+PRINT_TEXT_BODY = get_env_var("PRINT_TEXT_BODY", default="true").lower() == "true"
+PRINT_HTML_BODY = get_env_var("PRINT_HTML_BODY", default="false").lower() == "true"
+CONFIRM_MESSAGE = get_env_var("CONFIRM_MESSAGE", default="Your print job was processed.")
+MAX_ATTACHMENT_MB = int(get_env_var("MAX_ATTACHMENT_MB", default="25"))
 
 def decode_mime_words(s):
     if not s:
@@ -105,8 +114,8 @@ def process_email(msg):
     subject = decode_mime_words(msg.get("Subject", "(No Subject)"))
     printed_files = []
 
-    if ALLOWED_RECIPIENTS and from_addr not in ALLOWED_RECIPIENTS:
-        logger.warning(f"Sender {from_addr} not in ALLOWED_RECIPIENTS. Skipping print.")
+    if ALLOWED_SENDERS and from_addr not in ALLOWED_SENDERS:
+        logger.warning(f"Sender {from_addr} not in ALLOWED_SENDERS. Skipping print.")
         return
 
     log_stream = io.StringIO()
@@ -134,7 +143,10 @@ def process_email(msg):
             if ALLOWED_ATTACHMENT_TYPES and suffix not in ALLOWED_ATTACHMENT_TYPES:
                 logger.warning(f"Attachment '{filename}' type .{suffix} not allowed. Skipping.")
                 continue
-
+            size_mb = len(payload) / 1024 / 1024
+            if size_mb > MAX_ATTACHMENT_MB:
+                logger.warning(f"Attachment '{filename}' is too large: {size_mb:.1f} MB. Skipping.")
+                continue
             with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmpfile:
                 tmpfile.write(payload)
                 tmpfile_path = tmpfile.name
@@ -147,8 +159,19 @@ def process_email(msg):
             logger.info(f"Deleted temporary file: {tmpfile_path}")
 
         elif content_type in ["text/plain", "text/html"]:
+            if not PRINT_EMAIL_BODY:
+                logger.info(f"Skipping email body: {content_type}")
+                continue
+            if content_type == "text/plain" and not PRINT_TEXT_BODY:
+                logger.info("Skipping plain text email body")
+                continue
+
+            if content_type == "text/html" and not PRINT_HTML_BODY:
+                logger.info("Skipping HTML email body")
+                continue
+            
             if content_type == "text/html" and is_mostly_html_blank(payload.decode(errors="ignore")):
-                logger.warning(f"HTML email body is blank after stripping tags. Skipping.")
+                logger.warning("HTML email body is blank after stripping tags. Skipping.")
                 continue
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmpfile:
@@ -159,6 +182,7 @@ def process_email(msg):
             if print_file(tmpfile_path):
                 printed_any = True
                 printed_files.append(f"EmailBody-{content_type}")
+
             os.remove(tmpfile_path)
             logger.info(f"Deleted temporary file: {tmpfile_path}")
 
@@ -167,7 +191,8 @@ def process_email(msg):
 
     stream_handler.flush()
     logger.removeHandler(stream_handler)
-    send_confirmation_email(from_addr, log_stream.getvalue(), printed_files)
+    if SEND_CONFIRMATION:
+        send_confirmation_email(from_addr, log_stream.getvalue(), printed_files)
     log_stream.close()
 
 def main_loop():
