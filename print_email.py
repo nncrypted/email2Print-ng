@@ -91,13 +91,22 @@ def send_confirmation_email(to_email, log_text, printed_files):
     msg["To"] = to_email
 
     if DETAILED_CONFIRMATION:
-        msg.set_content(f"Your print job was processed:\n\n{log_text}")
+        msg.set_content(f"{CONFIRM_MESSAGE}\n\n{log_text}")
     else:
         lines = [
-            f"{time.strftime('%Y-%m-%d %H:%M:%S')} – Your file '{fname}' was printed on printer '{PRINTER_NAME}'"
-            for fname in printed_files
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {fname}"
+        for fname in printed_files
         ]
-        msg.set_content("\n".join(lines) if lines else "No files were printed.")
+
+        body = CONFIRM_MESSAGE
+
+    if printed_files:
+        body += "\n\nPrinted files:\n"
+        body += "\n".join(lines)
+    else:
+        body += "\n\nNo files were printed."
+
+        msg.set_content(body)
 
     try:
         logger.info(f"Sending confirmation email to {to_email}")
